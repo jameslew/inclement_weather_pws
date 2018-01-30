@@ -1,128 +1,192 @@
 /**
- *  Severe Weather Alert - PWS edition
+ *  Weather Monitor PWS
  *
  *  Author: Jim Lewallen
- *  Date: 2013-03-04
+ *  Date: 2018-01-29
  */
+
+definition(
+    name: "Weather Monitor PWS",
+    namespace: "jameslew",
+    author: "jameslew@live.com",
+    description: "Integrating a Personal Weather Station into SmartThings via Weather Underground.",
+    category: "Convenience",
+    iconUrl: "https://s3.amazonaws.com/smartapp-icons/Convenience/Cat-Convenience.png",
+    iconX2Url: "https://s3.amazonaws.com/smartapp-icons/Convenience/Cat-Convenience%402x.png"
+)
+{
+	appSetting "grovestreamsKey"
+}
+
 preferences {
 	section ("Weather threshholds to alert at..."){
-    	input "highwindspeed", "number", title: "Avg Wind Speed", required: false
-    	input "hightempf", "number", title: "High Temperature", required: false
-    	input "lowtempf", "number", title: "Low Temperature", required: false
-    	input "highrainfall", "number", title: "Rainfall Threshhold", required: false    
-        input "apikey", "string", title: "API Key", required: false
+    	input "highwindspeed", "number", title: "Avg Wind Speed (MPH)", required: false, defaultValue: 10
+    	input "highwindgust", "number", title: "High Wind Gust (MPH)", required: false, defaultValue: 18
+    	input "hightempf", "number", title: "High Temperature (Deg F)", required: false, defaultValue: 85
+    	input "lowtempf", "number", title: "Low Temperature (Deg F)", required: false, defaultValue: 37
+    	input "highrainfall", "number", title: "Rainfall Threshhold (Inches)", required: false, defaultValue: 1    
     }
-
 	section ("In addition to push notifications, send text alerts to...") {
 		input "phone1", "phone", title: "Phone Number 1", required: false
 		input "phone2", "phone", title: "Phone Number 2", required: false
 		input "phone3", "phone", title: "Phone Number 3", required: false
 	}
-	section("Which people should I watch for?") {
-		input "people", "capability.presenceSensor", title: "Presence sensor", description: "Which people(s)?", multiple: true, required: false
-	}
 	section ("Weather Underground Weather Station ID") {
 		input "stationid", "text", title: "Station ID", required: true
 	}
-    section ("Custom Weather Quotes") {
-    	input "coldWeatherQuote", "text", title: "Custom Cold Comment", required: false
-    }
+	section ("Custom Alert Messages") {
+		input "warmmsg", "text", description: "Its hot at the weather station ", title: "Too Hot Message", required: false, defaultValue: "Its hot at the weather station "
+		input "coldmsg", "text", description: "Its cold at the weather station ", title: "Too Cold Message", required: false, defaultValue: "Its cold at the weather station "
+		input "windymsg", "text", description: "Its windy at the weather station ", title: "Windy Message", required: false, defaultValue: "Its windy at the weather station "
+		input "gustymsg", "text", description: "Whoa that was a gust... ", title: "Wind Gust Message", required: false, defaultValue: "Whoa that was a gust... "
+		input "wetmsg", "text", description: "Its really wet out ", title: "Wet Message", required: false, defaultValue: "Its really wet out "
+	}
 }
 
 def installed() {
 	log.debug "Installed with settings: ${settings}"
 	setDefaultWeather()
-    checkWeather()
-	schedule("0 0/15 * * * ?", "checkWeather") //Check at top and half-past of every hour
-    schedule("0 0 5 * * ?", "setDefaultWeather") //Reset in the morning
-    schedule("0 0 16 * * ?", "setDefaultWeather") //Reset in the afternoon
-
+    runIn(5, "checkWeather")
+	runEvery5Minutes("checkWeather") //Check at top and half-past of every hour
+    schedule("0 0 5,16 * * ?", "setDefaultWeather") //Reset in the morning
 }
 
 def updated() {
-    log.debug "Updated with settings: ${settings}"
-    unsubscribe()
+	log.debug "Updated with settings: ${settings}"
     setDefaultWeather()
-    checkWeather()
-    schedule("0 0/15 * * * ?", "checkWeather") //Check at top and half-past of every hour
-    schedule("0 0 5 * * ?", "setDefaultWeather") //Reset in the morning
-    schedule("0 0 16 * * ?", "setDefaultWeather") //Reset in the afternoon
+    runIn(5, "checkWeather")
+	runEvery5Minutes("checkWeather") //Check at top and half-past of every hour
+    schedule("0 0 5,16 * * ?", "setDefaultWeather") //Reset in the morning
 }
 
 def checkWeather() {
-	log.debug "Checking Weather"
-	httpGet("http://api.wunderground.com/api/${apikey}/conditions/q/pws:${stationid}.json") 
-    	{ response ->
+    def weather
 
-	def windspeed = response.data.current_observation.wind_mph.floatValue()
-        def tempf = response.data.current_observation.temp_f.floatValue()
-	def hourlyprecip = Float.parseFloat(response.data.current_observation.precip_1hr_in)
-	    	    
-        log.debug "Actual: ${windspeed}, ${tempf}, ${hourlyprecip}"
-        log.debug "Threshholds: ${highwindspeed}, ${hightempf}, ${lowtempf}, ${hourlyprecip}"
-        log.debug "State: ${state.lastHighWindSpeed}, ${state.lasthightempf}, ${state.lastlowtempf}, ${state.lasthourlyprecip}"
-        
-        if (windspeed > highwindspeed) {
-        	if (windspeed >= state.lastHighWindSpeed + 3.0 ) {
-				state.lastHighWindSpeed = windspeed
-				notifyHousemates("High wind speed of ${windspeed}mph at the house")
-            } else {log.debug "not enough wind speed change"}
-        } else { state.lastHighWindSpeed = windspeed }
-        
-        if (tempf > hightempf) {
-        	if (tempf >= state.lasthightempf + 3.0 ) {
-                state.lasthightempf = tempf
-        		notifyHousemates("It's damn hot at the house: ${tempf}F")
-            } else {log.debug "not enough high temp change"}
-        } else { state.lasthightempf = tempf }
-        
-        if (tempf < lowtempf) {
-        	if (tempf <= state.lastlowtempf - 3.0 ) {
-        		state.lastlowtempf = tempf
-				notifyHousemates(coldWeatherQuote + ": ${tempf}")
-            } else { log.debug "not enough low temp change" }
-        } else { state.lastlowtempf = tempf }
-        
-	if (hourlyprecip > highrainfall) {
-        	if (hourlyprecip  >= state.lasthourlyprecip + 1.0 ) {
-				state.lasthourlyprecip = hourlyprecip 
-        		notifyHousemates("It's raining buckets at the house: ${hourlyprecip} in.")
-            } else {log.debug "not enough precip change"}
-        } else { state.lasthourlyprecip = hourlyprecip }
-       	
+    // If there is a zipcode defined, use it, otherwise SmartThings will determine your current location from the Hub.
+    log.debug "WeatherStation: pws:{${stationid}}"
+    weather = getWeatherFeature( "conditions", "pws:${stationid}" )
+
+    // Check if the variable is populated, otherwise return.
+    if (!weather) {
+        log.debug "Something went wrong, no data found." 
+        return false
     }
+    
+    def windspeed = weather.current_observation.wind_mph
+    def tempf = weather.current_observation.temp_f
+    def hourlyprecip = Float.parseFloat(weather.current_observation.precip_1hr_in)
+    def windguststr = weather.current_observation.wind_gust_mph
+    def windgust = 0.0
+     
+    try {
+     	windgust = Float.parseFloat(weather.current_observation.wind_gust_mph)
+    }
+    catch ( e ) 
+    { 
+    	windgust = 0.0 
+    }
+	
+    log.debug "Actual: ${windspeed}, ${tempf}, ${hourlyprecip}, ${windgust}"
+    log.debug "Threshholds: ${highwindspeed}, ${hightempf}, ${lowtempf}, ${hourlyprecip}, ${highwindgust}"
+    log.debug "State: ${state.lastHighWindSpeed}, ${state.lasthightempf}, ${state.lastlowtempf}, ${state.lasthourlyprecip}, ${state.lasthighwindgust}"
+	log.debug "${settings.windymsg} ${settings.warmmsg} ${settings.coldmsg} ${settings.wetmsg} ${settings.gustymsg}"
+	// log.debug "sending: http://grovestreams.com:80/api/feed?api_key=${appSettings.grovestreamsKey}&compid=cmp1&tempF=${tempf}"
+    
+    /*
+	try
+    {
+		httpPut("http://grovestreams.com:80/api/feed?api_key=${appSettings.grovestreamsKey}&compid=cmp1&tempF=${tempf}&windspeed=${windspeed}&windgust=${windgust}","")
+    }
+    catch(e)
+    {
+    }
+    */
+    
+    if (windspeed > highwindspeed) {
+        state.lastHighWindSpeed = windspeed
+        notifyPeople("${settings.windymsg} ${windspeed}", state.lasthighwindspeedreport)
+        state.lasthighwindspeedreport = now()
+    } else { state.lastHighWindSpeed = windspeed }
+
+	if ((float) windgust > highwindgust) {
+        state.lasthighwindgust = windgust
+        notifyPeople("${settings.gustymsg} ${windgust}", state.lasthighwindgustreport) 
+        state.lasthighwindgustreport = now()
+    } else { state.lasthighwindgust = windgust }
+
+    if (tempf > hightempf) {
+        if (tempf >= state.lasthightempf + 2.0 ) {
+            state.lasthightempf = tempf
+            notifyPeople("${settings.warmmsg} ${tempf}F", state.lasthightempreport)
+            state.lasthightempreport = now()
+        } else {log.debug "not enough high temp change"}
+    } else { state.lasthightempf = tempf }
+
+    if (tempf < lowtempf) {
+        if (tempf <= state.lastlowtempf - 2.0 && tempf > -100.00 ) {
+            state.lastlowtempf = tempf
+            notifyPeople("${settings.coldmsg} ${tempf}F", state.lastlowtempreport)
+            state.lastlowtempreport = now()
+        } else { log.debug "not enough low temp change" }
+    } else { state.lastlowtempf = tempf }
+
+    if (hourlyprecip > highrainfall) {
+        if (hourlyprecip  >= state.lasthourlyprecip + 1.0 ) {
+            state.lasthourlyprecip = hourlyprecip 
+            notifyPeople("${settings.wetmsg} ${hourlyprecip}in.", state.lasthighprecipreport)
+            state.lasthighprecipreport = now()
+        } else {log.debug "not enough precip change"}
+    } else { state.lasthourlyprecip = hourlyprecip }
 }
 
-def logTraceWithPush(message) {
-    sendPush message
-    log.debug message
+def calculateTimeDelta(reportTimeStamp) {
+    	        
+    	def timeDiff = Math.abs(now()-reportTimeStamp)
+    	timeDiff = Math.round(timeDiff/(1000*60))
+    
+        log.debug "Last Report: ${reportTimeStamp}, Time since last report: ${timeDiff}"
+        return timeDiff
 }
 
 def setDefaultWeather() {
-	logTraceWithPush("Resetting the weather state")
     state.lastHighWindSpeed = 0.0
+    state.lasthighwindgust = 0.0
     state.lasthightempf = 65.0
-    state.lastlowtempf = 40.0
+    state.lastlowtempf = 55.0
     state.lasthourlyprecip = 0.0
-    log.debug "state: ${state.lastHighWindSpeed}, ${state.lasthightempf}, ${state.lastlowtempf}, ${state.lasthourlyprecip}"
+    
+    state.lasthightempreport = now() - (15*1000*60)
+    state.lasthighwindspeedreport = now() - (15*1000*60)
+    state.lastlowtempreport = now() - (15*1000*60)
+    state.lasthighprecipreport = now() - (15*1000*60)
+    state.lasthighwindgustreport = now() - (15*1000*60)
+    
+	log.debug "Resetting weather state values"
 }
 
-private notifyHousemates(message) {
+private notifyPeople(message, lastReport) {
 
     def t0 = new Date(now() - (8 * 60 * 60 * 1000))
+	def h0 = t0.getHours()
 
-	if (t0.getHours() >= 6 && t0.getHours() <= 22)
+	def lastReportInterval = calculateTimeDelta(lastReport)
+    if ( lastReportInterval < 30)
     {
-        log.debug "We got one! ${message}"
+    	log.debug "Too soon, less than 15 minutes: ${lastReportInterval}"
+        return
+	}
+
+	if (h0 >= 6 && h0 <= 24)
+    {
+        log.debug "Weather event to be reported: ${message}"
         send(message)
     } else {
-    	log.debug "Christ, it's ${t0.getHours()}, nobody cares!"
-        send(message)
+    	log.debug "Swallowing notification during off hours: ${t0.getHours()}"
     }
 }
 
 private send(message) {
-	sendPush message
+	sendPush (message)
 	if (settings.phone1) {
 		sendSms phone1, message
 	}
