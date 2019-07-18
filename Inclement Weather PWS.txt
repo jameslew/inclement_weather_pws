@@ -2,20 +2,22 @@
  *  Weather Monitor PWS
  *
  *  Author: Jim Lewallen
- *  Date: 2018-01-29
+ *  Date: 2015-06-16
  */
 
 definition(
     name: "Weather Monitor PWS",
     namespace: "jameslew",
     author: "jameslew@live.com",
-    description: "Integrating a Personal Weather Station into SmartThings via Weather Underground.",
+    description: "Integrating a Personal Weather Station into SmartThings via Davis Weather API",
     category: "Convenience",
     iconUrl: "https://s3.amazonaws.com/smartapp-icons/Convenience/Cat-Convenience.png",
     iconX2Url: "https://s3.amazonaws.com/smartapp-icons/Convenience/Cat-Convenience%402x.png"
 )
 {
-	appSetting "grovestreamsKey"
+    appSetting "weatherlink_device_id"
+    appSetting "weatherlink_password"
+    appSetting "weatherlink_api_token"
 }
 
 preferences {
@@ -24,15 +26,12 @@ preferences {
     	input "highwindgust", "number", title: "High Wind Gust (MPH)", required: false, defaultValue: 18
     	input "hightempf", "number", title: "High Temperature (Deg F)", required: false, defaultValue: 85
     	input "lowtempf", "number", title: "Low Temperature (Deg F)", required: false, defaultValue: 37
-    	input "highrainfall", "number", title: "Rainfall Threshhold (Inches)", required: false, defaultValue: 1    
+    	input "highrainfall", "number", title: "Rainfall Threshhold (Inches)", required: false, defaultValue: 1.0   
     }
 	section ("In addition to push notifications, send text alerts to...") {
 		input "phone1", "phone", title: "Phone Number 1", required: false
 		input "phone2", "phone", title: "Phone Number 2", required: false
 		input "phone3", "phone", title: "Phone Number 3", required: false
-	}
-	section ("Weather Underground Weather Station ID") {
-		input "stationid", "text", title: "Station ID", required: true
 	}
 	section ("Custom Alert Messages") {
 		input "warmmsg", "text", description: "Its hot at the weather station ", title: "Too Hot Message", required: false, defaultValue: "Its hot at the weather station "
@@ -44,7 +43,7 @@ preferences {
 }
 
 def installed() {
-	log.debug "Installed with settings: ${settings}"
+	log.debug "Installed with settings: ${appSettings}"
 	setDefaultWeather()
     runIn(5, "checkWeather")
 	runEvery5Minutes("checkWeather") //Check at top and half-past of every hour
@@ -52,7 +51,7 @@ def installed() {
 }
 
 def updated() {
-	log.debug "Updated with settings: ${settings}"
+	log.debug "Updated with settings: ${appSettings}"
     setDefaultWeather()
     runIn(5, "checkWeather")
 	runEvery5Minutes("checkWeather") //Check at top and half-past of every hour
@@ -62,24 +61,47 @@ def updated() {
 def checkWeather() {
     def weather
 
-    // If there is a zipcode defined, use it, otherwise SmartThings will determine your current location from the Hub.
-    log.debug "WeatherStation: pws:{${stationid}}"
-    weather = getWeatherFeature( "conditions", "pws:${stationid}" )
-
+    try {
+    	log.debug "https://api.weatherlink.com/v1/NoaaExt.json?user=${appSettings.weatherlink_device_id}&pass=${appSettings.weatherlink_password}&apiToken=${appSettings.weatherlink_api_token}"
+        httpGet("https://api.weatherlink.com/v1/NoaaExt.json?user=${appSettings.weatherlink_device_id}&pass=${appSettings.weatherlink_password}&apiToken=${appSettings.weatherlink_api_token}") { resp ->
+            resp.headers.each {
+            log.debug "${it.name} : ${it.value}"
+        }
+        //log.debug "response contentType: ${resp.contentType}"
+        //log.debug "response data: ${resp.data}"
+        weather = resp.data
+        }
+    } catch (e) {
+        log.error "something went wrong: $e"
+    }
+    
+    //log.debug "got weather: ${weather}"
+    
     // Check if the variable is populated, otherwise return.
     if (!weather) {
         log.debug "Something went wrong, no data found." 
         return false
     }
     
-    def windspeed = weather.current_observation.wind_mph
-    def tempf = weather.current_observation.temp_f
-    def hourlyprecip = Float.parseFloat(weather.current_observation.precip_1hr_in)
-    def windguststr = weather.current_observation.wind_gust_mph
+    log.debug "setting params"
+    
+    def windspeed = Float.parseFloat(weather.wind_mph)
+    def tempf = Float.parseFloat(weather.temp_f)
+    def hourlyprecip
+    if(weather.davis_current_observation.rain_rate_in_per_hour!=null)
+    {
+    	hourlyprecip = Float.parseFloat(weather.davis_current_observation.rain_rate_in_per_hour)
+    } else
+    {
+    	hourlyprecip = 0.0
+    }
+    def windguststr = Float.parseFloat(weather.davis_current_observation.wind_ten_min_gust_mph)
     def windgust = 0.0
      
+    log.debug "params set"
+     
     try {
-     	windgust = Float.parseFloat(weather.current_observation.wind_gust_mph)
+     	windgust = Float.parseFloat(weather.davis_current_observation.wind_ten_min_gust_mph)
     }
     catch ( e ) 
     { 
@@ -90,21 +112,10 @@ def checkWeather() {
     log.debug "Threshholds: ${highwindspeed}, ${hightempf}, ${lowtempf}, ${hourlyprecip}, ${highwindgust}"
     log.debug "State: ${state.lastHighWindSpeed}, ${state.lasthightempf}, ${state.lastlowtempf}, ${state.lasthourlyprecip}, ${state.lasthighwindgust}"
 	log.debug "${settings.windymsg} ${settings.warmmsg} ${settings.coldmsg} ${settings.wetmsg} ${settings.gustymsg}"
-	// log.debug "sending: http://grovestreams.com:80/api/feed?api_key=${appSettings.grovestreamsKey}&compid=cmp1&tempF=${tempf}"
-    
-    /*
-	try
-    {
-		httpPut("http://grovestreams.com:80/api/feed?api_key=${appSettings.grovestreamsKey}&compid=cmp1&tempF=${tempf}&windspeed=${windspeed}&windgust=${windgust}","")
-    }
-    catch(e)
-    {
-    }
-    */
-    
-    if (windspeed > highwindspeed) {
-        state.lastHighWindSpeed = windspeed
-        notifyPeople("${settings.windymsg} ${windspeed}", state.lasthighwindspeedreport)
+   
+    if ((float) windspeed > highwindspeed) {
+		state.lastHighWindSpeed = windspeed
+  		notifyPeople("${settings.windymsg} ${windspeed}", state.lasthighwindspeedreport)
         state.lasthighwindspeedreport = now()
     } else { state.lastHighWindSpeed = windspeed }
 
@@ -113,8 +124,8 @@ def checkWeather() {
         notifyPeople("${settings.gustymsg} ${windgust}", state.lasthighwindgustreport) 
         state.lasthighwindgustreport = now()
     } else { state.lasthighwindgust = windgust }
-
-    if (tempf > hightempf) {
+   
+    if ((float) tempf > hightempf) {
         if (tempf >= state.lasthightempf + 2.0 ) {
             state.lasthightempf = tempf
             notifyPeople("${settings.warmmsg} ${tempf}F", state.lasthightempreport)
@@ -129,7 +140,7 @@ def checkWeather() {
             state.lastlowtempreport = now()
         } else { log.debug "not enough low temp change" }
     } else { state.lastlowtempf = tempf }
-
+     
     if (hourlyprecip > highrainfall) {
         if (hourlyprecip  >= state.lasthourlyprecip + 1.0 ) {
             state.lasthourlyprecip = hourlyprecip 
